@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>WFscapes-style Word Puzzle — Clone</title>
+  <style>
+    :root{--bg:#e6f7ff;--panel:#ffffff;--accent:#2b9bf3;--tile:#f6e8c8;--tile-border:#d9b87a}
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, Arial}
+    body{background:linear-gradient(180deg,#bfe9ff 0%, #c9f3d8 100%);display:flex;align-items:center;justify-content:center}
+    #app{width:420px;max-width:98vw;height:88vh;background:var(--panel);border-radius:18px;box-shadow:0 8px 30px rgba(0,0,0,.12);overflow:hidden;display:flex;flex-direction:column}
+    header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:transparent}
+    header .left{display:flex;align-items:center;gap:10px}
+    .coin{background:linear-gradient(180deg,#ffd85a,#ffb84d);padding:6px 10px;border-radius:20px;font-weight:700}
+    main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:10px}
+
+    /* Grid area */
+    .board-wrap{flex:1;display:flex;align-items:center;justify-content:center;width:100%}
+    .board{width:88%;max-width:360px;background:transparent;padding:14px;border-radius:12px;display:grid;grid-template-columns:repeat(6,1fr);grid-auto-rows:48px;gap:8px;place-items:center}
+    .cell{width:100%;height:100%;background:rgba(0,0,0,0.08);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff}
+    .cell.empty{background:transparent;box-shadow:none}
+    .cell.tile{background:var(--tile);color:#5e3a10;border-radius:8px;border:3px solid var(--tile-border);box-shadow:inset 0 -4px 0 rgba(0,0,0,0.05)}
+
+    /* Circle letters */
+    .circle-wrap{width:92%;display:flex;align-items:center;justify-content:center;padding:8px 0}
+    .circle{position:relative;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle at 50% 40%,#fff, #f0f0f0);display:flex;align-items:center;justify-content:center}
+    .letter{position:absolute;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:20px;background:var(--panel);box-shadow:0 6px 14px rgba(0,0,0,0.12);user-select:none}
+    .letter.dragging{transform:scale(0.95);opacity:0.8}
+    .controls{display:flex;gap:8px;margin-top:10px}
+    .btn{background:var(--accent);color:#fff;padding:8px 12px;border-radius:10px;font-weight:700;border:none}
+    .btn.secondary{background:#eee;color:#333}
+    .wordbar{min-height:44px;padding:6px 12px;border-radius:12px;background:rgba(0,0,0,0.04);display:flex;align-items:center;gap:8px}
+
+    footer{padding:8px 12px;display:flex;align-items:center;justify-content:space-between}
+
+    /* small helpers */
+    .hint-pill{background:#fff;padding:6px 8px;border-radius:10px;box-shadow:0 4px 10px rgba(0,0,0,0.06);font-weight:700}
+    .small{font-size:13px;color:#333}
+
+    /* responsive tweak */
+    @media (max-width:420px){.circle{width:200px;height:200px}.letter{width:48px;height:48px;font-size:18px}}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="left"><div class="coin" id="coin">554</div><div class="small">Level <span id="levelNum">1</span></div></div>
+      <div class="right"><button class="btn secondary" id="menuBtn">Menu</button></div>
+    </header>
+
+    <main>
+      <div class="board-wrap">
+        <div class="board" id="board" aria-hidden="false"></div>
+      </div>
+
+      <div style="width:100%;display:flex;flex-direction:column;align-items:center">
+        <div class="circle-wrap">
+          <div class="circle" id="circle">
+            <!-- letters injected here -->
+          </div>
+        </div>
+
+        <div style="width:92%;display:flex;flex-direction:column;gap:8px;align-items:center;margin-bottom:8px">
+          <div class="wordbar" id="currentWord">&nbsp;</div>
+          <div class="controls">
+            <button class="btn" id="submitBtn">Submit</button>
+            <button class="btn secondary" id="shuffleBtn">Shuffle</button>
+            <button class="btn secondary" id="hintBtn">Hint (-10)</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <div class="small">Hints left: <span id="hintsLeft">3</span></div>
+      <div class="small">Score: <span id="score">0</span></div>
+    </footer>
+  </div>
+
+  <script>
+    // --- Simple WFscapes-style word puzzle implementation ---
+    // Single-file, no libraries. Level data stored as JSON below.
+
+    const LEVELS = [
+      // Level 1: matches the video screenshot letters (C G H E N A) and words like HANG, CANE, HEN
+      {
+        id:1,
+        letters: ['C','G','H','E','N','A'],
+        // grid: 6x6 (rows left-to-right). Use null for empty, or {ch:'', locked:false}
+        // We'll describe words with start row,col and direction and word text so we can draw crossword pattern
+        words:[
+          {word:'HANG', r:0,c:2,dir:'across'},
+          {word:'CANE', r:1,c:0,dir:'across'},
+          {word:'HEN', r:2,c:3,dir:'down'},
+          {word:'ACE', r:0,c:1,dir:'down'}
+        ]
+      }
+    ];
+
+    // State
+    let state = { level:1, score:0, coins:554, hints:3 };
+    const SAVE_KEY = 'wf_clone_save_v1';
+
+    // Elements
+    const boardEl = document.getElementById('board');
+    const circleEl = document.getElementById('circle');
+    const currentWordEl = document.getElementById('currentWord');
+    const submitBtn = document.getElementById('submitBtn');
+    const shuffleBtn = document.getElementById('shuffleBtn');
+    const hintBtn = document.getElementById('hintBtn');
+    const levelNum = document.getElementById('levelNum');
+    const scoreEl = document.getElementById('score');
+    const coinEl = document.getElementById('coin');
+    const hintsLeftEl = document.getElementById('hintsLeft');
+
+    // Load progress
+    function load() {
+      try{ const raw = localStorage.getItem(SAVE_KEY); if(raw) state = JSON.parse(raw); }catch(e){}
+      updateUI();
+    }
+    function save(){ localStorage.setItem(SAVE_KEY, JSON.stringify(state)); }
+
+    // Build board from level meta
+    function buildBoard(levelData){
+      // 6x6 grid
+      boardEl.innerHTML = '';
+      boardEl.style.gridTemplateColumns = 'repeat(6,1fr)';
+      const grid = Array.from({length:36}).map(()=>({empty:true, ch:null, solved:false}));
+
+      // Place placeholders for words
+      levelData.words.forEach(w=>{
+        for(let i=0;i<w.word.length;i++){
+          const r = w.r + (w.dir==='down'?i:0);
+          const c = w.c + (w.dir==='across'?i:0);
+          const idx = r*6 + c;
+          grid[idx].empty = false; grid[idx].ch = w.word[i]; grid[idx].slotId = w.word + '_' + i; grid[idx].solved = false;
+        }
+      });
+
+      // Render 36 cells
+      grid.forEach((cell, i)=>{
+        const el = document.createElement('div');
+        el.className = 'cell ' + (cell.empty? 'empty':'tile');
+        el.dataset.idx = i;
+        el.dataset.ch = cell.ch || '';
+        el.dataset.solved = cell.solved;
+        el.innerHTML = cell.empty? '': '<span class="cell-letter">' + (cell.solved?cell.ch:'') + '</span>';
+        boardEl.appendChild(el);
+      });
+
+      // Return grid for reference
+      return grid;
+    }
+
+    // Circle letters UI
+    function buildCircle(letters){
+      circleEl.innerHTML = '';
+      const n = letters.length;
+      const R = circleEl.clientWidth/2 - 36;
+      // center
+      const cx = circleEl.clientWidth/2, cy = circleEl.clientHeight/2;
+      letters.forEach((L,i)=>{
+        const angle = (i / n) * Math.PI*2 - Math.PI/2; // start top
+        const x = cx + Math.cos(angle)*R - 28;
+        const y = cy + Math.sin(angle)*R - 28;
+        const el = document.createElement('div');
+        el.className = 'letter'; el.textContent = L; el.style.left = x + 'px'; el.style.top = y + 'px';
+        el.dataset.letter = L; el.dataset.idx = i;
+        circleEl.appendChild(el);
+      });
+
+      // enable drag/select
+      attachLetterHandlers();
+    }
+
+    // Interaction variables
+    let currentSelection = [];
+    let selecting = false;
+
+    function attachLetterHandlers(){
+      const letters = Array.from(circleEl.querySelectorAll('.letter'));
+      letters.forEach(el=>{
+        el.addEventListener('pointerdown', onLetterDown);
+        el.addEventListener('pointerup', onLetterUp);
+        el.addEventListener('pointerenter', onLetterEnter);
+      });
+      window.addEventListener('pointerup', ()=>{ selecting=false; letters.forEach(l=>l.classList.remove('dragging')); });
+    }
+
+    function onLetterDown(e){
+      selecting = true; currentSelection = [];
+      e.target.classList.add('dragging'); addToSelection(e.target);
+      e.target.setPointerCapture(e.pointerId);
+    }
+    function onLetterUp(e){
+      e.target.classList.remove('dragging'); selecting=false; // keep currentSelection
+    }
+    function onLetterEnter(e){ if(selecting) addToSelection(e.target); }
+
+    function addToSelection(el){
+      if(!el || !el.dataset) return;
+      const ch = el.dataset.letter;
+      const idx = el.dataset.idx;
+      if(currentSelection.find(s=>s.idx===idx)) return; // avoid duplicates
+      currentSelection.push({ch, idx, el});
+      updateCurrentWord();
+      el.classList.add('dragging');
+    }
+
+    function updateCurrentWord(){
+      if(currentSelection.length===0){ currentWordEl.innerHTML = '&nbsp;'; return; }
+      const w = currentSelection.map(s=>s.ch).join('');
+      currentWordEl.textContent = w;
+    }
+
+    // Game logic: check submitted word against level words
+    let levelGrid = null, levelMeta = null;
+    function submitWord(){
+      const w = currentSelection.map(s=>s.ch).join('');
+      if(!w) return;
+      // find word in level
+      const found = levelMeta.words.find(a=>a.word.toUpperCase()===w.toUpperCase());
+      if(found){
+        revealWord(found);
+        state.score += w.length*10; scoreEl.textContent = state.score; save();
+        // clear selection
+        clearSelection();
+        checkWin();
+      } else {
+        // small shake animation
+        currentWordEl.animate([{transform:'translateX(-6px)'},{transform:'translateX(6px)'},{transform:'translateX(0)'}],{duration:220,iterations:1});
+        // clear selection after a short delay
+        setTimeout(clearSelection, 300);
+      }
+    }
+
+    function revealWord(found){
+      const word = found.word;
+      for(let i=0;i<word.length;i++){
+        const r = found.r + (found.dir==='down'?i:0);
+        const c = found.c + (found.dir==='across'?i:0);
+        const idx = r*6 + c;
+        const cell = boardEl.children[idx];
+        if(cell){ cell.innerHTML = '<span class="cell-letter">' + word[i] + '</span>'; cell.dataset.solved = 'true'; }
+      }
+      // mark word as solved to avoid re-solving
+      found.solved = true;
+    }
+
+    function clearSelection(){
+      currentSelection.forEach(s=>s.el.classList.remove('dragging'));
+      currentSelection = []; updateCurrentWord();
+    }
+
+    function checkWin(){
+      const unsolved = levelMeta.words.find(w=>!w.solved);
+      if(!unsolved){ // level complete
+        setTimeout(()=>{ alert('Level complete! +50 points'); state.score += 50; state.level++; levelNum.textContent = state.level; buildLevel(); save(); }, 200);
+      }
+    }
+
+    // Shuffle letters
+    function shuffleLetters(){
+      const letters = levelMeta.letters.slice();
+      for(let i=letters.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [letters[i],letters[j]]=[letters[j],letters[i]]; }
+      buildCircle(letters);
+    }
+
+    // Hint: reveal one letter in first unsolved word
+    function useHint(){
+      if(state.hints<=0){ alert('No hints left'); return; }
+      const target = levelMeta.words.find(w=>!w.solved);
+      if(!target) return;
+      // reveal first unrevealed letter of target
+      for(let i=0;i<target.word.length;i++){
+        const r = target.r + (target.dir==='down'?i:0);
+        const c = target.c + (target.dir==='across'?i:0);
+        const idx = r*6 + c; const cell = boardEl.children[idx];
+        if(cell && cell.dataset.solved!=='true'){
+          cell.innerHTML = '<span class="cell-letter">' + target.word[i] + '</span>'; cell.dataset.solved='true'; state.hints--; hintsLeftEl.textContent = state.hints; state.score += 5; scoreEl.textContent = state.score; save(); break;
+        }
+      }
+      // if fully revealed, mark solved
+      target.solved = Array.from(target.word).every((ch,i)=>{
+        const r = target.r + (target.dir==='down'?i:0);
+        const c = target.c + (target.dir==='across'?i:0);
+        const idx = r*6 + c; return boardEl.children[idx].dataset.solved==='true';
+      });
+      checkWin();
+    }
+
+    // Build a level from LEVELS
+    function buildLevel(){
+      const lvl = state.level || 1; const meta = LEVELS.find(l=>l.id===lvl) || LEVELS[0]; levelMeta = JSON.parse(JSON.stringify(meta));
+      // reset solved flags
+      levelMeta.words.forEach(w=>w.solved=false);
+      levelGrid = buildBoard(levelMeta);
+      buildCircle(levelMeta.letters);
+      levelNum.textContent = state.level;
+    }
+
+    // Attach UI handlers
+    submitBtn.addEventListener('click', submitWord);
+    shuffleBtn.addEventListener('click', shuffleLetters);
+    hintBtn.addEventListener('click', useHint);
+
+    // Keyboard support: backspace clears, enter submits
+    window.addEventListener('keydown', e=>{
+      if(e.key==='Enter') submitWord();
+      if(e.key==='Backspace') clearSelection();
+    });
+
+    // Init
+    function updateUI(){ levelNum.textContent = state.level; scoreEl.textContent = state.score; coinEl.textContent = state.coins; hintsLeftEl.textContent = state.hints; }
+    load(); buildLevel(); updateUI();
+
+    // Save periodically
+    setInterval(save, 3000);
+
+    // Expose for debugging
+    window._wf = { state, buildLevel, LEVELS };
+  </script>
+</body>
+</html>
